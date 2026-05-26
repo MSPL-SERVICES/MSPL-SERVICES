@@ -14,6 +14,10 @@ import towerAsset from './assets/images/lattice_tower_telecom_1779711889458.png'
 import railwayAsset from './assets/images/railway_signaling_system_1779711942256.png';
 import solarAsset from './assets/images/utility_solar_farm_1779711926466.png';
 import railwaySplicingAsset from './assets/images/railway_ofc_splicing_1779715300000_png_1779715310052.png';
+import rfEngineeringAsset from './assets/images/rf_engineering_telecom_1779711997664.png';
+import towerMaintenanceAsset from './assets/images/tower_maintenance_climbing_1779712034444.png';
+import fiberMaintenanceAsset from './assets/images/fiber_optic_maintenance_1779711909109.png';
+import healthScreeningAsset from './assets/images/health_screening_industrial_1779712016590.png';
 import fiberBrochure1 from './assets/images/fiber_deployment_maintenance_1779712693892_png_1779715221985.png';
 import fiberBrochure2 from './assets/images/ofc_glance_1779712716174_png_1779715240305.png';
 import fiberBrochure3 from './assets/images/fiber_om_services_1779712726743_png_1779715258021.png';
@@ -446,7 +450,7 @@ export default function App() {
       id: "network-engineering",
       title: "Network Engineering Services & RF Engineering Services",
       icon: <Wifi className="w-5 h-5 text-indigo-600" />,
-      imageUrl: "/src/assets/images/rf_engineering_telecom_1779711997664.png",
+      imageUrl: rfEngineeringAsset,
       shortDesc: "Comprehensive wireless network designs including 3G, 4G, 5G and Broadband networks.",
       category: "CORE TELECOM",
       brochure: [rfBrochure, networkBrochure],
@@ -469,7 +473,7 @@ export default function App() {
       id: "telecom-construction",
       title: "Telecom Site Construction & Equipment Installation",
       icon: <Layers className="w-5 h-5 text-blue-600" />,
-      imageUrl: "/src/assets/images/lattice_tower_telecom_1779711889458.png",
+      imageUrl: towerAsset,
       shortDesc: "High-quality telecom tower installation and maintenance services across India.",
       category: "CONSTRUCTION",
       brochure: [telecomConstBrochure1, telecomConstBrochure2],
@@ -490,7 +494,7 @@ export default function App() {
       id: "tower-maintenance",
       title: "Tower Maintenance Services",
       icon: <ShieldCheck className="w-5 h-5 text-emerald-600" />,
-      imageUrl: "/src/assets/images/tower_maintenance_climbing_1779712034444.png",
+      imageUrl: towerMaintenanceAsset,
       shortDesc: "Inspecting, repairing, and optimizing telecom towers to ensure peak performance.",
       category: "MAINTENANCE",
       brochure: [towerMaintBrochure1, towerMaintBrochure2, towerMaintBrochure3],
@@ -508,7 +512,7 @@ export default function App() {
       id: "fiber-deployment",
       title: "Fiber Deployment & Maintenance (OFC O&M)",
       icon: <Zap className="w-5 h-5 text-amber-500" />,
-      imageUrl: "/src/assets/images/fiber_optic_maintenance_1779711909109.png",
+      imageUrl: fiberMaintenanceAsset,
       shortDesc: "End-to-end optical Fiber cable (OFC) laying and installation services.",
       category: "FIBER OPTICS",
       brochure: [fiberBrochure1, fiberBrochure2, fiberBrochure3],
@@ -524,7 +528,7 @@ export default function App() {
       id: "solar-energy",
       title: "Solar & Energy Management Services",
       icon: <Sun className="w-5 h-5 text-yellow-500" />,
-      imageUrl: "/src/assets/images/utility_solar_farm_1779711926466.png",
+      imageUrl: solarAsset,
       shortDesc: "Implementation and management of solar projects with an experienced technical team.",
       category: "RENEWABLES",
       brochure: [solarBrochure1, solarBrochure2],
@@ -538,7 +542,7 @@ export default function App() {
       id: "railway-signalling",
       title: "Railway Signalling & Communication Network",
       icon: <Train className="w-5 h-5 text-slate-700" />,
-      imageUrl: "/src/assets/images/railway_signaling_system_1779711942256.png",
+      imageUrl: railwayAsset,
       shortDesc: "Specialized cable route planning and signalling system modifications for railways.",
       category: "RAILWAYS",
       brochure: [railwayBrochure1, railwayBrochure2],
@@ -555,7 +559,7 @@ export default function App() {
       id: "health-screening",
       title: "Health Screening Services",
       icon: <Activity className="w-5 h-5 text-blue-500" />,
-      imageUrl: "/src/assets/images/health_screening_industrial_1779712016590.png",
+      imageUrl: healthScreeningAsset,
       shortDesc: "Dedicated health screening solutions as part of our diversified service portfolio.",
       category: "HEALTHCARE",
       brochure: [healthBrochure1, healthBrochure2],

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Employee, AttendanceLog, Payslip, HrUser, FinanceRecord, RecycleBinItem, DocumentFile, PayslipFormat, EmployeeHelpQuery } from '../types';
 import { 
   ShieldCheck, Phone, Key, Lock, CheckCircle2, UserPlus, Users, 
@@ -11,8 +11,11 @@ import {
   MapPin, Eye, Camera, ShieldAlert, Award, FileText, ClipboardList, TrendingUp, Settings, Trash, CheckCircle,
   Upload, HelpCircle
 } from 'lucide-react';
+import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import DocumentViewer from './DocumentViewer';
+import { auth } from '../lib/firebase';
 import { generatePayslipPDF } from '../lib/pdfHelper';
+import { formatIndiaPhoneNumber, normalizeIndiaPhoneForFirebase, sanitizeIndiaMobileDigits } from '../lib/phoneHelper';
 
 interface HrPortalProps {
   employees: Employee[];
@@ -66,9 +69,13 @@ export default function HrPortal({
   const [otpInput, setOtpInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [parentPasscode, setParentPasscode] = useState('');
-  const [simulatedOtp, setSimulatedOtp] = useState<string | null>(null);
-  const [showRealTimeSmsGateway, setShowRealTimeSmsGateway] = useState(false);
-  const [countdown, setCountdown] = useState(60);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [otpStatus, setOtpStatus] = useState('');
+  const [phoneVerified, setPhoneVerified] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<any>(null);
+  const recaptchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
 
   // --- Employee Auth States ---
   const [empSelectedId, setEmpSelectedId] = useState('');
@@ -227,31 +234,119 @@ export default function HrPortal({
   const [overrideDate, setOverrideDate] = useState(new Date().toISOString().substring(0, 10));
   const [overrideTime, setOverrideTime] = useState('09:30 AM');
 
-  // Interactive Live OTP Ticker
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (showRealTimeSmsGateway && countdown > 0) {
-      timer = setTimeout(() => {
-        setCountdown(prev => prev - 1);
-      }, 1000);
-    } else if (countdown === 0) {
-      setShowRealTimeSmsGateway(false);
-    }
-    return () => clearTimeout(timer);
-  }, [showRealTimeSmsGateway, countdown]);
+    if (!(auth as any)?.app || !recaptchaContainerRef.current) return;
 
-  // Send real-time OTP via clean visual notification channels
-  const handleGenericSendOtp = (e: React.MouseEvent) => {
+    if (!recaptchaVerifierRef.current) {
+      recaptchaVerifierRef.current = new RecaptchaVerifier(auth, recaptchaContainerRef.current, {
+        size: 'invisible'
+      });
+    }
+
+    return () => {
+      recaptchaVerifierRef.current?.clear();
+      recaptchaVerifierRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    setConfirmationResult(null);
+    setPhoneVerified(false);
+    setOtpStatus('');
+  }, [phoneInput, authMode]);
+
+  const resetPhoneAuthState = () => {
+    setConfirmationResult(null);
+    setPhoneVerified(false);
+    setOtpStatus('');
+    setIsSendingOtp(false);
+    setIsVerifyingOtp(false);
+  };
+
+  const ensureRecaptchaVerifier = () => {
+    if (!(auth as any)?.app) {
+      throw new Error('Firebase auth is not configured. Please check your Firebase settings.');
+    }
+
+    if (!recaptchaVerifierRef.current) {
+      if (!recaptchaContainerRef.current) {
+        throw new Error('Recaptcha container is not ready.');
+      }
+
+      recaptchaVerifierRef.current = new RecaptchaVerifier(auth, recaptchaContainerRef.current, {
+        size: 'invisible'
+      });
+    }
+
+    return recaptchaVerifierRef.current;
+  };
+
+  const normalizePhoneForFirebase = (rawPhone: string) => normalizeIndiaPhoneForFirebase(rawPhone);
+  const normalizePhoneForStorage = (rawPhone: string) => sanitizeIndiaMobileDigits(rawPhone);
+
+  const handlePhoneInputChange = (value: string) => {
+    setPhoneInput(sanitizeIndiaMobileDigits(value));
+  };
+
+  const handleNewPhoneInputChange = (value: string) => {
+    setNewPhone(sanitizeIndiaMobileDigits(value));
+  };
+
+  const handleMdDirectPhoneInputChange = (value: string) => {
+    setMdDirectPhone(sanitizeIndiaMobileDigits(value));
+  };
+
+  const handleSendRealOtp = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!/^\d{10}$/.test(phoneInput)) {
-      toast('Please enter a valid 10-digit registered phone number.', 'error');
+
+    const digits = phoneInput.replace(/\D/g, '');
+    if (digits.length !== 10) {
+      toast('Please enter a valid 10-digit mobile number to receive the OTP.', 'error');
       return;
     }
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    setSimulatedOtp(otp);
-    setCountdown(60);
-    setShowRealTimeSmsGateway(true);
-    toast(`✓ Real-Time cellular OTP code sent synchronously to +91 ${phoneInput}`, 'info');
+
+    try {
+      resetPhoneAuthState();
+      setIsSendingOtp(true);
+      setOtpStatus('Sending OTP to your phone...');
+
+      const verifier = ensureRecaptchaVerifier();
+      const phoneNumber = normalizePhoneForFirebase(phoneInput);
+      const result = await signInWithPhoneNumber(auth, phoneNumber, verifier);
+
+      setConfirmationResult(result);
+      setOtpStatus(`OTP sent to ${phoneNumber}. Enter the 6-digit code to continue.`);
+      toast(`OTP sent successfully to ${phoneNumber}.`, 'info');
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Unable to send OTP right now.';
+      toast(errorMessage, 'error');
+      resetPhoneAuthState();
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleVerifyPhoneOtp = async () => {
+    if (!confirmationResult) {
+      throw new Error('Please send the OTP first.');
+    }
+
+    const enteredOtp = otpInput.trim();
+    if (!/^\d{6}$/.test(enteredOtp)) {
+      throw new Error('Enter the 6-digit OTP sent to your phone.');
+    }
+
+    setIsVerifyingOtp(true);
+    setOtpStatus('Verifying OTP...');
+
+    try {
+      await confirmationResult.confirm(enteredOtp);
+      setPhoneVerified(true);
+      setConfirmationResult(null);
+      setOtpStatus('Phone verified successfully.');
+    } finally {
+      setIsVerifyingOtp(false);
+    }
   };
 
   // --- 1. Employee Workspace Login ---
@@ -281,59 +376,64 @@ export default function HrPortal({
   };
 
   // --- 2. HR Portal Login & New Registration ---
-  const handleRegisterHr = (e: React.FormEvent) => {
+  const handleRegisterHr = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneInput || !passwordInput || !otpInput) {
-      toast('All credentials fields including dynamic OTP are mandatory.', 'error');
+
+    if (!phoneInput || !passwordInput) {
+      toast('Please provide the phone number and a secure password for the HR account.', 'error');
       return;
     }
 
-    if (otpInput !== simulatedOtp) {
-      toast('Incorrect verification OTP code.', 'error');
+    try {
+      await handleVerifyPhoneOtp();
+    } catch (error: any) {
+      toast(error?.message || 'Phone verification failed. Please retry the OTP.', 'error');
       return;
     }
 
-    // Checking if already registered
-    if (registeredHrsList.some(hr => hr.phoneNumber === phoneInput)) {
+    const normalizedPhone = normalizePhoneForStorage(phoneInput);
+
+    if (registeredHrsList.some(hr => hr.phoneNumber === normalizedPhone)) {
       toast('This HR telephone connection is already registered. Please login.', 'warning');
       return;
     }
 
     const newHr: HrUser = {
-      phoneNumber: phoneInput,
+      phoneNumber: normalizedPhone,
       password: passwordInput,
-      verified: false, // Default is false! Requires Director Stamp
+      verified: false,
       isParentVerified: false
     };
 
     const updatedList = [...registeredHrsList, newHr];
     setRegisteredHrsList(updatedList);
-    
-    toast('✓ HR Setup Submitted! Please request our Managing Director (MD) to verify your registration via Parental Gateway.', 'success');
+
+    toast('✓ HR Setup Submitted! Please request your Managing Director to verify this registration.', 'success');
     setAuthMode('login');
     setOtpInput('');
     setPhoneInput('');
     setPasswordInput('');
-    setSimulatedOtp(null);
-    setShowRealTimeSmsGateway(false);
+    resetPhoneAuthState();
   };
 
-  const handleLoginHr = (e: React.FormEvent) => {
+  const handleLoginHr = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneInput || !passwordInput || !otpInput) {
-      toast('Please provide your phone connection, password, and active cellular OTP.', 'error');
+
+    if (!phoneInput || !passwordInput) {
+      toast('Please provide your phone connection and password.', 'error');
       return;
     }
 
-    const foundHr = registeredHrsList.find(hr => hr.phoneNumber === phoneInput);
+    try {
+      await handleVerifyPhoneOtp();
+    } catch (error: any) {
+      toast(error?.message || 'Phone verification failed. Please retry the OTP.', 'error');
+      return;
+    }
+
+    const normalizedPhone = normalizePhoneForStorage(phoneInput);
+    const foundHr = registeredHrsList.find(hr => hr.phoneNumber === normalizedPhone);
     if (!foundHr) {
-      // Fallback
-      if (phoneInput === '9911020260' && passwordInput === 'hr123' && (otpInput === simulatedOtp || otpInput === '123456')) {
-        setIsHrLoggedIn(true);
-        localStorage.setItem('mspl_hr_logged_in', 'true');
-        toast('✓ HR Session authenticated! Welcome back.', 'success');
-        return;
-      }
       toast('HR telephone registry not found. Setup your credentials under the New HR Setup tab.', 'error');
       return;
     }
@@ -343,24 +443,18 @@ export default function HrPortal({
       return;
     }
 
-    if (otpInput !== simulatedOtp && otpInput !== '123456') {
-      toast('Invalid cellular verification code sequence.', 'error');
-      return;
-    }
-
     if (!foundHr.verified) {
-      toast('⚠️ Approval Needed: This HR Setup is pending certification by our Managing Director or Director.', 'warning');
+      toast('⚠️ Approval Needed: This HR Setup is pending certification by your Managing Director or Director.', 'warning');
       return;
     }
 
-    // Logged in
     setHrUser(foundHr);
     localStorage.setItem('mspl_hr_user', JSON.stringify(foundHr));
     setIsHrLoggedIn(true);
     localStorage.setItem('mspl_hr_logged_in', 'true');
     toast(`✓ Welcome back, HR Specialist [Conn: ${phoneInput}]`, 'success');
-    setSimulatedOtp(null);
-    setShowRealTimeSmsGateway(false);
+    setOtpInput('');
+    resetPhoneAuthState();
   };
 
   const handleLogoutHr = () => {
@@ -408,7 +502,9 @@ export default function HrPortal({
   // A. Pre-register / Edit employee
   const handleSaveEmployee = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newId.trim() || !newName.trim() || !newPhone.trim() || !newPass.trim()) {
+    const cleanPhoneNumber = sanitizeIndiaMobileDigits(newPhone);
+
+    if (!newId.trim() || !newName.trim() || !cleanPhoneNumber || !newPass.trim()) {
       toast('All roster credentials are required.', 'error');
       return;
     }
@@ -420,7 +516,7 @@ export default function HrPortal({
           return {
             ...emp,
             name: newName.trim(),
-            phoneNumber: newPhone,
+            phoneNumber: cleanPhoneNumber,
             password: newPass,
             familyDetails: newFamily,
             address: newAddress,
@@ -447,7 +543,7 @@ export default function HrPortal({
         name: newName.trim(),
         status: 'approved',
         registeredAt: new Date().toLocaleDateString('en-US'),
-        phoneNumber: newPhone,
+        phoneNumber: cleanPhoneNumber,
         password: newPass,
         familyDetails: newFamily,
         address: newAddress,
@@ -475,7 +571,7 @@ export default function HrPortal({
     setEditingEmployee(emp);
     setNewId(emp.id);
     setNewName(emp.name);
-    setNewPhone(emp.phoneNumber || '');
+    setNewPhone(sanitizeIndiaMobileDigits(emp.phoneNumber || ''));
     setNewPass(emp.password || '123456');
     setNewFamily(emp.familyDetails || '');
     setNewAddress(emp.address || '');
@@ -714,20 +810,18 @@ export default function HrPortal({
 
   const handleMDDirectAddHR = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!mdDirectPhone || !mdDirectPass) {
+    const cleanPhoneNumber = sanitizeIndiaMobileDigits(mdDirectPhone);
+
+    if (!cleanPhoneNumber || !mdDirectPass) {
       toast('Please enter both Phone number and Password.', 'error');
       return;
     }
-    if (!/^\d{10}$/.test(mdDirectPhone)) {
-      toast('Please enter a valid 10-digit Phone number.', 'error');
-      return;
-    }
-    if (registeredHrsList.some(h => h.phoneNumber === mdDirectPhone)) {
+    if (registeredHrsList.some(h => h.phoneNumber === cleanPhoneNumber)) {
       toast('An HR user with this Phone number already registered.', 'error');
       return;
     }
     const newHr = {
-      phoneNumber: mdDirectPhone,
+      phoneNumber: cleanPhoneNumber,
       password: mdDirectPass,
       verified: true,
       isParentVerified: true
@@ -735,14 +829,14 @@ export default function HrPortal({
     setRegisteredHrsList([newHr, ...registeredHrsList]);
     setMdDirectPhone('');
     setMdDirectPass('');
-    toast(`✓ Directly registered & certified HR account for +91 ${mdDirectPhone}`, 'success');
+    toast(`✓ Directly registered & certified HR account for ${formatIndiaPhoneNumber(cleanPhoneNumber)}`, 'success');
   };
 
   const handleMDToggleHRVerification = (phone: string) => {
     const updated = registeredHrsList.map(hr => {
       if (hr.phoneNumber === phone) {
         const nextState = !hr.verified;
-        toast(`✓ HR +91 ${phone} ${nextState ? 'Approved' : 'Suspended'}!`, 'success');
+        toast(`✓ HR ${formatIndiaPhoneNumber(phone)} ${nextState ? 'Approved' : 'Suspended'}!`, 'success');
         return { ...hr, verified: nextState, isParentVerified: nextState };
       }
       return hr;
@@ -757,7 +851,7 @@ export default function HrPortal({
     }
     const updated = registeredHrsList.filter(hr => hr.phoneNumber !== phone);
     setRegisteredHrsList(updated);
-    toast(`✓ HR account +91 ${phone} removed completely.`, 'success');
+    toast(`✓ HR account ${formatIndiaPhoneNumber(phone)} removed completely.`, 'success');
   };
 
   // E. Direct Payroll
@@ -967,29 +1061,6 @@ export default function HrPortal({
   return (
     <div className="space-y-8 select-none relative">
 
-      {/* DYNAMIC OTP POPUP BANNER CELL ROUTER */}
-      {showRealTimeSmsGateway && simulatedOtp && (
-        <div className="fixed top-20 right-6 z-[120] max-w-sm w-full bg-slate-900 border border-indigo-500/30 text-white rounded-2xl shadow-2xl p-4.5 animate-bounce-slow font-sans text-left">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-full bg-indigo-500/15 flex items-center justify-center text-indigo-400 font-extrabold text-sm shrink-0 animate-pulse">
-              💬
-            </div>
-            <div className="flex-1 space-y-1">
-              <div className="flex justify-between items-baseline">
-                <span className="text-xs font-black uppercase text-indigo-400">Cellular OTP Gateway</span>
-                <span className="text-[9px] text-slate-400 font-mono">T-minus {countdown}s</span>
-              </div>
-              <p className="text-[11px] text-slate-205 leading-relaxed font-medium">
-                SMS request safely delivered to +91 {phoneInput}. Dynamic registration safety OTP token keys:
-              </p>
-              <div className="p-2 border border-dashed border-sky-400/20 bg-sky-950/20 rounded-lg text-center font-mono text-base font-extrabold tracking-widest text-sky-450 select-all">
-                {simulatedOtp}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* --- RENDER PHASE 1: LOGIN CHANNELS SELECTOR --- */}
       {!isHrLoggedIn && !isDirectorLoggedIn && (
         <div className="max-w-xl mx-auto py-8 text-center space-y-6">
@@ -1061,7 +1132,7 @@ export default function HrPortal({
             <div className="p-6 sm:p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl backdrop-blur-md space-y-6 animate-fade-in text-left">
               <div className="text-center space-y-1">
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white font-display">MSPL Certified HR Terminal Login</h3>
-                <p className="text-xs text-slate-500">Dual verification requires registered telephone connection and active OTP verification.</p>
+                <p className="text-xs text-slate-500">Use your real mobile number and Firebase will send the one-time code directly to your phone.</p>
               </div>
 
               <div className="flex bg-slate-100 dark:bg-slate-950 p-1 rounded-xl select-none text-xs font-bold leading-none shrink-0">
@@ -1084,36 +1155,48 @@ export default function HrPortal({
               <form onSubmit={authMode === 'login' ? handleLoginHr : handleRegisterHr} className="space-y-4 text-xs font-medium">
                 <div className="space-y-1">
                   <label className="block text-[10px] font-bold uppercase text-slate-500">Registered Telephone Number *</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="tel"
-                      required
-                      placeholder="e.g. 9911020260"
-                      value={phoneInput}
-                      onChange={e => setPhoneInput(e.target.value)}
-                      className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 font-bold focus:outline-none"
-                    />
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="flex flex-1 items-center bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                      <span className="px-3.5 py-2.5 text-sm font-bold text-slate-700 dark:text-slate-200 border-r border-slate-200 dark:border-slate-800 select-none">
+                        +91
+                      </span>
+                      <input
+                        type="tel"
+                        required
+                        inputMode="numeric"
+                        autoComplete="tel"
+                        maxLength={10}
+                        placeholder="9999999999"
+                        value={phoneInput}
+                        onChange={e => handlePhoneInputChange(e.target.value)}
+                        className="w-full bg-transparent px-3.5 py-2.5 font-bold focus:outline-none"
+                      />
+                    </div>
                     <button
                       type="button"
-                      onClick={handleGenericSendOtp}
-                      className="px-3.5 bg-slate-100 dark:bg-slate-950 hover:bg-slate-200 border border-slate-205 dark:border-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-bold cursor-pointer transition select-none leading-none shrink-0"
+                      onClick={handleSendRealOtp}
+                      disabled={isSendingOtp}
+                      className="px-3.5 bg-slate-100 dark:bg-slate-950 hover:bg-slate-200 border border-slate-205 dark:border-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-bold cursor-pointer transition select-none leading-none shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Send OTP
+                      {isSendingOtp ? 'Sending...' : 'Send Real OTP'}
                     </button>
                   </div>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold uppercase text-slate-500">Real-Time Cellular Code OTP *</label>
+                  <label className="block text-[10px] font-bold uppercase text-slate-500">Firebase SMS Verification Code *</label>
                   <input
                     type="text"
                     required
                     maxLength={6}
-                    placeholder="Enter 6-digit OTP code received..."
+                    placeholder="Enter the 6-digit OTP received on your phone"
                     value={otpInput}
-                    onChange={e => setOtpInput(e.target.value)}
+                    onChange={e => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-center tracking-widest font-extrabold focus:outline-none placeholder-slate-400"
                   />
+                  {otpStatus && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-1">{otpStatus}</p>
+                  )}
                 </div>
 
                 <div className="space-y-1">
@@ -1128,16 +1211,19 @@ export default function HrPortal({
                   />
                 </div>
 
+                <div ref={recaptchaContainerRef} className="hidden" />
+
                 <button
                   type="submit"
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer transition shadow-md"
+                  disabled={isVerifyingOtp}
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer transition shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {authMode === 'login' ? 'Confirm Verification Gateway' : 'Submit HR Registration Card'}
+                  {isVerifyingOtp ? 'Verifying...' : authMode === 'login' ? 'Confirm Verification Gateway' : 'Submit HR Registration Card'}
                 </button>
               </form>
 
               <div className="text-[10px] uppercase font-mono text-center text-slate-400 select-none">
-                💡 Demo HR Terminal Connection: Tel <strong className="font-bold underline text-slate-600 dark:text-indigo-400">9911020260</strong> &bull; Password <strong className="font-bold text-slate-600 dark:text-indigo-400">hr123</strong>. Send OTP to trigger delivery.
+                🔒 Use a real mobile number that can receive SMS. Firebase will send the OTP instantly and the code will be validated before access is granted.
               </div>
             </div>
           )}
@@ -1273,14 +1359,21 @@ export default function HrPortal({
                       </div>
                       <div className="space-y-1">
                         <label className="block text-slate-450">Mobile Contact Number *</label>
-                        <input
-                          type="tel"
-                          required
-                          placeholder="e.g. 9845012345"
-                          value={newPhone}
-                          onChange={e => setNewPhone(e.target.value)}
-                          className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 font-bold"
-                        />
+                        <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                          <span className="px-3 py-2 text-sm font-bold text-slate-700 dark:text-slate-200 border-r border-slate-200 dark:border-slate-800 select-none">
+                            +91
+                          </span>
+                          <input
+                            type="tel"
+                            required
+                            inputMode="numeric"
+                            maxLength={10}
+                            placeholder="9845012345"
+                            value={newPhone}
+                            onChange={e => handleNewPhoneInputChange(e.target.value)}
+                            className="w-full bg-transparent px-3 py-2 font-bold focus:outline-none"
+                          />
+                        </div>
                       </div>
                       <div className="space-y-1">
                         <label className="block text-slate-450">Private Password Passcode *</label>
@@ -1392,7 +1485,7 @@ export default function HrPortal({
                             </div>
                           </td>
                           <td className="py-3 px-4 font-mono font-bold text-indigo-650 dark:text-sky-400">{emp.id}</td>
-                          <td className="py-3 px-4 font-mono font-bold text-slate-600 dark:text-slate-350">{emp.phoneNumber ? `+91 ${emp.phoneNumber}` : "No phone"}</td>
+                          <td className="py-3 px-4 font-mono font-bold text-slate-600 dark:text-slate-350">{formatIndiaPhoneNumber(emp.phoneNumber) || "No phone"}</td>
                           <td className="py-3 px-4">
                             <div className="flex gap-2.5 font-mono text-[10px] font-bold text-slate-600 dark:text-slate-305">
                               <span className="px-1.5 py-0.5 bg-sky-50 dark:bg-sky-950/30 text-sky-650 rounded border border-sky-100 dark:border-sky-900/50">CL: {emp.leaveBalance?.casual ?? 0}</span>
@@ -2133,14 +2226,21 @@ export default function HrPortal({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-semibold">
                     <div className="space-y-1">
                       <label className="block text-slate-455">10-Digit Phone ID *</label>
-                      <input
-                        type="tel"
-                        required
-                        placeholder="e.g. 9845012345"
-                        value={mdDirectPhone}
-                        onChange={e => setMdDirectPhone(e.target.value)}
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-202 dark:border-slate-800 rounded-xl px-3 py-2 font-bold focus:outline-none dark:text-white"
-                      />
+                      <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-202 dark:border-slate-800 rounded-xl overflow-hidden">
+                        <span className="px-3 py-2 text-sm font-bold text-slate-700 dark:text-slate-200 border-r border-slate-200 dark:border-slate-800 select-none">
+                          +91
+                        </span>
+                        <input
+                          type="tel"
+                          required
+                          inputMode="numeric"
+                          maxLength={10}
+                          placeholder="9845012345"
+                          value={mdDirectPhone}
+                          onChange={e => handleMdDirectPhoneInputChange(e.target.value)}
+                          className="w-full bg-transparent px-3 py-2 font-bold focus:outline-none dark:text-white"
+                        />
+                      </div>
                     </div>
                     <div className="space-y-1">
                       <label className="block text-slate-455">Login Passcode *</label>
@@ -2174,7 +2274,7 @@ export default function HrPortal({
                       {registeredHrsList.filter(hr => !hr.verified).map(hr => (
                         <div key={hr.phoneNumber} className="p-4 rounded-2xl border bg-white dark:bg-slate-950 flex justify-between items-center text-xs">
                           <div>
-                            <span className="font-bold text-slate-800 dark:text-slate-100 block">HR Setup Connection: +91 {hr.phoneNumber}</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-100 block">HR Setup Connection: {formatIndiaPhoneNumber(hr.phoneNumber)}</span>
                             <span className="text-[9.5px] text-amber-550 block font-mono">Status: Pending MD Signature Approval</span>
                           </div>
 
@@ -2205,7 +2305,7 @@ export default function HrPortal({
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-850/40">
                         {registeredHrsList.map(hr => (
                           <tr key={hr.phoneNumber} className="hover:bg-slate-50/20">
-                            <td className="py-3 px-4 font-mono font-bold text-slate-800 dark:text-slate-100">+91 {hr.phoneNumber}</td>
+                            <td className="py-3 px-4 font-mono font-bold text-slate-800 dark:text-slate-100">{formatIndiaPhoneNumber(hr.phoneNumber)}</td>
                             <td className="py-3 px-4 select-none">
                               {hr.verified ? (
                                 <span className="px-2.5 py-0.5 rounded text-[8.5px] font-black bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">✓ CERTIFIED STATUS</span>
