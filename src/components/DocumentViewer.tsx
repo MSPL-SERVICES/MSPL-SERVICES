@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { FileText, Image as ImageIcon, FileSpreadsheet, Eye, Download, ArrowLeft, RefreshCw, CheckCircle } from 'lucide-react';
 
 interface DocumentViewerProps {
@@ -22,12 +22,99 @@ export default function DocumentViewer({ name, type, data, onClose }: DocumentVi
   const isExcel = normalizedType.includes('excel') || normalizedType.includes('spreadsheet') || normalizedName.endsWith('.xls') || normalizedName.endsWith('.xlsx');
 
   // Helper to force download if required
-  const handleDownload = () => {
-    const link = document.createElement('a');
-    link.href = data;
-    link.download = name;
-    link.click();
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // Convert a base64 string to a Blob
+  const base64ToBlob = (b64Data: string, contentType = '', sliceSize = 512) => {
+    const byteCharacters = atob(b64Data);
+    const byteArrays = [] as Uint8Array[];
+
+    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+      const slice = byteCharacters.slice(offset, offset + sliceSize);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      byteArrays.push(new Uint8Array(byteNumbers));
+    }
+
+    return new Blob(byteArrays, { type: contentType });
   };
+
+  // Build a usable URL for previewing/downloading the incoming data
+  useEffect(() => {
+    // cleanup previous url
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+
+    if (!data) return;
+
+    if (data.startsWith('data:')) {
+      setPreviewUrl(data);
+      return;
+    }
+
+    // if it's a base64 payload without a data: prefix, build a Blob URL
+    const mime = type || (isPdf ? 'application/pdf' : isImage ? 'image/*' : 'application/octet-stream');
+    try {
+      const blob = base64ToBlob(data.replace(/^data:[^;]+;base64,/, ''), mime);
+      const url = URL.createObjectURL(blob);
+      setPreviewUrl(url);
+    } catch (err) {
+      // fallback: set raw data if something else is provided
+      setPreviewUrl(data);
+    }
+
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, type, isPdf, isImage]);
+
+  const handleDownload = () => {
+    if (!data) return;
+
+    // If data is a data URL or blob URL we can use it directly
+    if (data.startsWith('data:') || (previewUrl && previewUrl.startsWith('blob:'))) {
+      const link = document.createElement('a');
+      link.href = previewUrl || data;
+      link.download = name;
+      link.click();
+      return;
+    }
+
+    // Otherwise assume base64 and build a blob
+    const mime = type || 'application/octet-stream';
+    try {
+      const blob = base64ToBlob(data.replace(/^data:[^;]+;base64,/, ''), mime);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.click();
+      // revoke after a short timeout to ensure download started
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      // final fallback: open raw data
+      const link = document.createElement('a');
+      link.href = data;
+      link.download = name;
+      link.click();
+    }
+  };
+
+  // Allow closing with Escape key
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-[110] bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 select-none animate-fade-in">
