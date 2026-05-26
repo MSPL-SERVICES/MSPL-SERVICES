@@ -76,6 +76,7 @@ export default function HrPortal({
   const [confirmationResult, setConfirmationResult] = useState<any>(null);
   const recaptchaContainerRef = useRef<HTMLDivElement | null>(null);
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null);
+  const recaptchaRenderedRef = useRef(false);
 
   // --- Employee Auth States ---
   const [empSelectedId, setEmpSelectedId] = useState('');
@@ -243,9 +244,22 @@ export default function HrPortal({
       });
     }
 
+    if (!recaptchaRenderedRef.current) {
+      recaptchaVerifierRef.current
+        .render()
+        .then(() => {
+          recaptchaRenderedRef.current = true;
+        })
+        .catch((error) => {
+          console.error('Unable to render Firebase reCAPTCHA verifier:', error);
+          recaptchaRenderedRef.current = false;
+        });
+    }
+
     return () => {
       recaptchaVerifierRef.current?.clear();
       recaptchaVerifierRef.current = null;
+      recaptchaRenderedRef.current = false;
     };
   }, []);
 
@@ -263,7 +277,7 @@ export default function HrPortal({
     setIsVerifyingOtp(false);
   };
 
-  const ensureRecaptchaVerifier = () => {
+  const ensureRecaptchaVerifier = async () => {
     if (!(auth as any)?.app) {
       throw new Error('Firebase auth is not configured. Please check your Firebase settings.');
     }
@@ -276,6 +290,17 @@ export default function HrPortal({
       recaptchaVerifierRef.current = new RecaptchaVerifier(auth, recaptchaContainerRef.current, {
         size: 'invisible'
       });
+    }
+
+    if (!recaptchaRenderedRef.current) {
+      try {
+        await recaptchaVerifierRef.current.render();
+        recaptchaRenderedRef.current = true;
+      } catch (error) {
+        console.error('Unable to render Firebase reCAPTCHA verifier:', error);
+        recaptchaRenderedRef.current = false;
+        throw new Error('The OTP verifier could not be initialized. Please refresh the page and try again.');
+      }
     }
 
     return recaptchaVerifierRef.current;
@@ -308,17 +333,27 @@ export default function HrPortal({
     try {
       resetPhoneAuthState();
       setIsSendingOtp(true);
-      setOtpStatus('Sending OTP to your phone...');
+      setOtpStatus('Preparing secure OTP verification...');
 
-      const verifier = ensureRecaptchaVerifier();
+      const verifier = await ensureRecaptchaVerifier();
       const phoneNumber = normalizePhoneForFirebase(phoneInput);
       const result = await signInWithPhoneNumber(auth, phoneNumber, verifier);
 
       setConfirmationResult(result);
-      setOtpStatus(`OTP sent to ${phoneNumber}. Enter the 6-digit code to continue.`);
-      toast(`OTP sent successfully to ${phoneNumber}.`, 'info');
+      setOtpStatus(`OTP request accepted for ${formatIndiaPhoneNumber(phoneInput)}. Check your phone and enter the 6-digit code below.`);
+      toast(`OTP request accepted for ${formatIndiaPhoneNumber(phoneInput)}. Please check your phone and enter the verification code.`, 'info');
     } catch (error: any) {
-      const errorMessage = error?.message || 'Unable to send OTP right now.';
+      const errorCode = error?.code;
+      let errorMessage = error?.message || 'Unable to send OTP right now.';
+
+      if (errorCode === 'auth/operation-not-allowed') {
+        errorMessage = 'Phone Authentication is not enabled for this Firebase project. Please enable it in Firebase Console.';
+      } else if (errorCode === 'auth/invalid-phone-number') {
+        errorMessage = 'The phone number is invalid. Please confirm the 10-digit mobile number and try again.';
+      } else if (errorCode === 'auth/recaptcha-not-enabled') {
+        errorMessage = 'The OTP verifier is not available on this page. Please refresh and try again.';
+      }
+
       toast(errorMessage, 'error');
       resetPhoneAuthState();
     } finally {
@@ -1211,7 +1246,7 @@ export default function HrPortal({
                   />
                 </div>
 
-                <div ref={recaptchaContainerRef} className="hidden" />
+                <div ref={recaptchaContainerRef} className="h-0 overflow-hidden opacity-0 pointer-events-none" />
 
                 <button
                   type="submit"
