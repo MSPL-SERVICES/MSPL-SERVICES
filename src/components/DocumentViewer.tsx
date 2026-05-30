@@ -27,11 +27,11 @@ export default function DocumentViewer({ name, type, data, onClose }: DocumentVi
   // Convert a base64 string to a Blob
   const base64ToBlob = (b64Data: string, contentType = '', sliceSize = 512) => {
     const byteCharacters = atob(b64Data);
-    const byteArrays = [] as Uint8Array[];
+    const byteArrays: BlobPart[] = [];
 
     for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
       const slice = byteCharacters.slice(offset, offset + sliceSize);
-      const byteNumbers = new Array(slice.length);
+      const byteNumbers = new Array<number>(slice.length);
       for (let i = 0; i < slice.length; i++) {
         byteNumbers[i] = slice.charCodeAt(i);
       }
